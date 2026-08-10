@@ -1,0 +1,83 @@
+# ============================================================================
+#  Future Store — site-root Apache configuration.
+#
+#  This file governs the WHOLE application. It replaces an earlier copy that had
+#  been duplicated from api/.htaccess by mistake — that stale copy carried API
+#  header-forwarding rules and a comment claiming "nothing here affects the
+#  website outside api/", which meant the public site ran with no security
+#  headers and no protection over includes/ or stray dump files at all.
+# ============================================================================
+
+# --- No directory listing anywhere ------------------------------------------
+Options -Indexes
+
+# --- Keep internal errors internal ------------------------------------------
+# config.php turns display_errors off at runtime, but a parse/compile error in
+# any file that is hit BEFORE config.php loads would still be shown to the
+# visitor (full server path included). Turning it off at the server level too
+# closes that window. Logging stays on so the operator still sees everything.
+<IfModule mod_php.c>
+    php_flag display_errors off
+    php_flag log_errors on
+</IfModule>
+
+# --- Security response headers (site-wide) ----------------------------------
+# CSP intentionally allows 'unsafe-inline' for scripts and styles: this app
+# ships inline <script> blocks and inline style="" attributes throughout, and a
+# strict CSP would break every page. Output is consistently escaped with e()
+# (htmlspecialchars, ENT_QUOTES) so reflected/stored XSS surface is already low;
+# the directives below still add real defence — object-src/base-uri lockdown,
+# framing protection, and a bound on where scripts/styles/fonts may load from.
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'"
+
+    # HSTS is emitted only when the request actually arrived over HTTPS, so it
+    # never strands a plain-HTTP local dev setup (which is how XAMPP runs). It
+    # activates by itself the day the site is served over TLS.
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains" "expr=%{HTTPS} == 'on'"
+
+    # Stop advertising the exact PHP build in every response. PHP writes
+    # X-Powered-By into the MAIN header table, so it must be unset WITHOUT
+    # "always" (the always-variant only edits the internal err_headers table and
+    # would leave the real header untouched). The Apache/OpenSSL banner in
+    # Server: is controlled by ServerTokens in httpd.conf, outside a .htaccess
+    # file's reach — done there as part of this remediation.
+    Header unset X-Powered-By
+</IfModule>
+
+# --- Never serve source, config, dumps, or backups --------------------------
+# Defence in depth for R-05: includes/config.php holds the DB credentials. PHP
+# executes rather than reveals it today, but a future server misconfiguration
+# (php engine off, a rename to .php.bak) would otherwise hand the file over as
+# text. These rules refuse the whole class outright.
+<FilesMatch "\.(sql|bak|save|old|swp|swo|log|env|ini|yml|yaml|md|dist|sh|inc|phps|tpl)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Dot-files (.env, .git, editor temp) are never web content.
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# --- includes/ is library code, never a request target ----------------------
+# Every file here is pulled in via require_once by a front controller; none is
+# meant to be opened directly. Requesting includes/config.php returns a blank
+# page today (it only defines constants) but this makes the intent explicit and
+# survives a future change that adds output to one of these files.
+RedirectMatch 404 (?i)/includes/.*\.php$

@@ -1,0 +1,49 @@
+# ============================================================================
+#  Uploaded product images live here — nothing in this folder may EXECUTE.
+# ============================================================================
+#
+#  admin/product-form.php already validates uploads properly: it whitelists
+#  jpg/jpeg/png/webp, rejects files over 3 MB, calls getimagesize() to confirm
+#  the bytes really decode as an image, and deliberately refuses SVG because an
+#  SVG can carry an embedded <script>. That is genuinely good validation.
+#
+#  This file exists anyway, because upload validation is the kind of control
+#  that fails silently and completely. A polyglot file — valid image bytes at
+#  the front, PHP code appended after — passes getimagesize() cleanly. So does
+#  a GIF header followed by <?php. If such a file ever lands here with a name
+#  the server is willing to run, the attacker gets remote code execution on the
+#  whole site, and every other defence stops mattering at that moment.
+#
+#  Turning execution off for the directory means that even a successful upload
+#  of hostile code is inert: the server hands back the bytes as a download
+#  instead of running them. This is why the rule is worth having even though
+#  the validation upstream looks correct today. Validation can be edited by a
+#  future change; this cannot be bypassed by one.
+
+# Refuse to hand any request in this folder to a script interpreter.
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+
+# Belt and braces for servers using PHP-FPM/CGI, where php_flag has no effect.
+<FilesMatch "\.(php|php3|php4|php5|php7|php8|phtml|phar|pl|py|cgi|asp|aspx|sh|shtml)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Never let a browser reinterpret an image as HTML.
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Content-Disposition "inline"
+</IfModule>
+
+Options -Indexes -ExecCGI
+AddHandler default-handler .php .phtml .phar .cgi .pl .py

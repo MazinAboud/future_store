@@ -1,0 +1,55 @@
+# ============================================================================
+#  Future Store API — Apache configuration for this folder only.
+#  Nothing here affects the website outside api/.
+# ============================================================================
+
+# --- Make the Authorization header reach PHP --------------------------------
+# The app sends "Authorization: Bearer <token>". Depending on how PHP is wired
+# into Apache, that header can be dropped before PHP ever sees it, which shows
+# up as every authenticated request returning 401 for no visible reason. Both
+# blocks below re-publish it; whichever module is loaded does the job, and if
+# neither is, api/_bootstrap.php still falls back to apache_request_headers().
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTP:Authorization} ^(.+)$
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
+</IfModule>
+
+<IfModule mod_setenvif.c>
+    SetEnvIfNoCase ^Authorization$ "(.+)" HTTP_AUTHORIZATION=$1
+</IfModule>
+
+# --- Never serve the shared bootstrap directly ------------------------------
+# Requesting it produces no useful output anyway, but blocking it keeps the
+# folder listing honest about what is and isn't an endpoint.
+<Files "_bootstrap.php">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</Files>
+
+# --- Block any diagnostic file that finds its way back here -----------------
+# _selftest.php was deleted before deployment. This rule means that if it is
+# ever restored — from a backup, a git checkout, or a well-meaning copy — it
+# still cannot be reached from the internet. A deleted file protects you once;
+# a rule protects you every time.
+<FilesMatch "^_">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
+# --- Documentation and dumps are never served from here ---------------------
+<FilesMatch "\.(md|sql|log|bak|save|swp|ini|yml|yaml|txt)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
+# --- No directory listing ---------------------------------------------------
+Options -Indexes
