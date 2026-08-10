@@ -35,7 +35,7 @@ require __DIR__ . '/includes/header.php';
   <div class="hero-text">
     <div class="white">FUTURE STORE — الخرطوم</div>
     <h1>أحدث الهواتف الذكية، بأفضل سعر وضمان معتمد</h1>
-    <p>آيفون، سامسونج، شاومي، وجوجل — كل الموديلات في مكان واحد، مع شحن سريع لكل السودان وضمان رسمي على كل جهاز.</p>
+    <p>آيفون، سامسونج، شاومي، هواوي، وهونر — كل الموديلات في مكان واحد، مع شحن سريع لكل السودان وضمان رسمي على كل جهاز.</p>
     <div class="hero-actions">
       <a href="<?= BASE_URL ?>/products.php" class="btn btn-outline"style="color:#fff;border-color:rgba(255,255,255,.5)">تسوق الآن</a>
       <a href="<?= BASE_URL ?>/compare.php" class="btn btn-outline" style="color:#fff;border-color:rgba(255,255,255,.5)">قارن بين الأجهزة</a>

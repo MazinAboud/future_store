@@ -52,11 +52,22 @@ if ($action === 'accept') {
         $upd = $pdo->prepare("UPDATE orders SET status = 'confirmed', handled_by = ? WHERE id = ? AND status = 'pending'");
         $upd->execute([$me['id'], $orderId]);
 
+        // Stock is already decremented above. If the order left 'pending' while
+        // we held the item locks, committing would charge the same units twice
+        // for one sale — abort so the rollback undoes the decrement too.
+        if ($upd->rowCount() === 0) {
+            throw new RuntimeException('NOT_PENDING');
+        }
+
+        order_log_event($pdo, $orderId, 'pending', 'confirmed', (int)$me['id'], $me['role']);
         $pdo->commit();
         flash_set('success', "تم قبول الطلب #$orderId وتأكيده.");
     } catch (Throwable $e) {
         $pdo->rollBack();
-        flash_set('error', "تعذر قبول الطلب #$orderId — المخزون لم يعد كافيًا لأحد المنتجات. جرّب رفض الطلب بدل ذلك.");
+        $msg = $e->getMessage() === 'NOT_PENDING'
+            ? "الطلب #$orderId لم يعد بانتظار المراجعة — عولج بالفعل."
+            : "تعذر قبول الطلب #$orderId — المخزون لم يعد كافيًا لأحد المنتجات. جرّب رفض الطلب بدل ذلك.";
+        flash_set('error', $msg);
     }
 
 } elseif ($action === 'reject') {
@@ -68,7 +79,12 @@ if ($action === 'accept') {
     $reason = trim($_POST['reason'] ?? '');
     $stmt = $pdo->prepare("UPDATE orders SET status = 'rejected', rejection_reason = ?, handled_by = ? WHERE id = ? AND status = 'pending'");
     $stmt->execute([$reason ?: 'المخزون غير متوفر', $me['id'], $orderId]);
-    flash_set('info', "تم رفض الطلب #$orderId.");
+    if ($stmt->rowCount() > 0) {
+        order_log_event($pdo, $orderId, 'pending', 'rejected', (int)$me['id'], $me['role'], $reason ?: null);
+        flash_set('info', "تم رفض الطلب #$orderId.");
+    } else {
+        flash_set('error', "الطلب #$orderId لم يعد بانتظار المراجعة.");
+    }
 
 } elseif ($action === 'set_status') {
     $orderId = (int)$_POST['order_id'];
@@ -94,14 +110,23 @@ if ($action === 'accept') {
             redirect('/staff/index.php');
         }
 
-        if ($status === 'delivered') {
-            $stmt = $pdo->prepare("UPDATE orders SET status = ?, handled_by = ?, delivered_at = NOW() WHERE id = ?");
-        } else {
-            $stmt = $pdo->prepare("UPDATE orders SET status = ?, handled_by = ? WHERE id = ?");
+        if ($currentStatus === $status) {
+            flash_set('info', "الطلب #$orderId في هذه الحالة بالفعل.");
+            redirect('/staff/index.php');
         }
-        $stmt->execute([$status, $me['id'], $orderId]);
-        order_log_event($pdo, $orderId, $currentStatus, $status, (int)$me['id'], $me['role']);
-        flash_set('success', "تم تحديث حالة الطلب #$orderId.");
+
+        // "AND status = ?" pins the update to the state the transition was
+        // checked against; the event is written only if that update landed, so
+        // the trail can never claim a transition the order did not make.
+        $extra = $status === 'delivered' ? ", delivered_at = NOW()" : "";
+        $stmt = $pdo->prepare("UPDATE orders SET status = ?, handled_by = ?$extra WHERE id = ? AND status = ?");
+        $stmt->execute([$status, $me['id'], $orderId, $currentStatus]);
+        if ($stmt->rowCount() > 0) {
+            order_log_event($pdo, $orderId, $currentStatus, $status, (int)$me['id'], $me['role']);
+            flash_set('success', "تم تحديث حالة الطلب #$orderId.");
+        } else {
+            flash_set('error', "الطلب #$orderId تغيّرت حالته للتو — أعد تحميل الصفحة.");
+        }
     }
 
 } elseif ($action === 'confirm_payment') {
@@ -125,9 +150,14 @@ if ($action === 'accept') {
     } elseif (!order_can_mark_paid($o['status'], $o['payment_method'])) {
         flash_set('error', "لا يمكن تأكيد سداد الطلب #$orderId قبل تسليمه.");
     } else {
-        $pdo->prepare("UPDATE orders SET payment_status='paid' WHERE id = ? AND status='delivered'")->execute([$orderId]);
-        order_log_event($pdo, $orderId, null, 'payment_collected', (int)$me['id'], $me['role'], 'COD collected');
-        flash_set('success', "تم تأكيد استلام السداد للطلب #$orderId.");
+        $pay = $pdo->prepare("UPDATE orders SET payment_status='paid' WHERE id = ? AND status='delivered' AND payment_status<>'paid'");
+        $pay->execute([$orderId]);
+        if ($pay->rowCount() > 0) {
+            order_log_event($pdo, $orderId, null, 'payment_collected', (int)$me['id'], $me['role'], 'COD collected');
+            flash_set('success', "تم تأكيد استلام السداد للطلب #$orderId.");
+        } else {
+            flash_set('error', "تعذر تسجيل السداد للطلب #$orderId — تحقق من حالته.");
+        }
     }
 
 } elseif ($action === 'maintenance_status') {

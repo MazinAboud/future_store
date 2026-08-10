@@ -55,18 +55,36 @@ if ($action === 'accept') {
         $upd = $pdo->prepare("UPDATE orders SET status = 'confirmed', handled_by = ? WHERE id = ? AND status = 'pending'");
         $upd->execute([$me['id'], $orderId]);
 
+        // The stock rows above are already decremented inside this transaction.
+        // If the order is no longer 'pending' — a colleague accepted it while we
+        // were holding the item locks — committing here would subtract the same
+        // units a second time for a single sale. Aborting rolls the decrement
+        // back with everything else.
+        if ($upd->rowCount() === 0) {
+            throw new RuntimeException('NOT_PENDING');
+        }
+
+        order_log_event($pdo, $orderId, 'pending', 'confirmed', (int)$me['id'], $me['role']);
         $pdo->commit();
         flash_set('success', "تم قبول الطلب #$orderId وتأكيده.");
     } catch (Throwable $e) {
         $pdo->rollBack();
-        flash_set('error', "تعذر قبول الطلب #$orderId — المخزون لم يعد كافيًا لأحد المنتجات. جرّب رفض الطلب بدل ذلك.");
+        $msg = $e->getMessage() === 'NOT_PENDING'
+            ? "الطلب #$orderId لم يعد بانتظار المراجعة — عولج بالفعل."
+            : "تعذر قبول الطلب #$orderId — المخزون لم يعد كافيًا لأحد المنتجات. جرّب رفض الطلب بدل ذلك.";
+        flash_set('error', $msg);
     }
 
 } elseif ($action === 'reject') {
     $reason = trim($_POST['reason'] ?? '');
     $stmt = $pdo->prepare("UPDATE orders SET status = 'rejected', rejection_reason = ?, handled_by = ? WHERE id = ? AND status = 'pending'");
     $stmt->execute([$reason ?: 'المخزون غير متوفر', $me['id'], $orderId]);
-    flash_set('info', "تم رفض الطلب #$orderId.");
+    if ($stmt->rowCount() > 0) {
+        order_log_event($pdo, $orderId, 'pending', 'rejected', (int)$me['id'], $me['role'], $reason ?: null);
+        flash_set('info', "تم رفض الطلب #$orderId.");
+    } else {
+        flash_set('error', "الطلب #$orderId لم يعد بانتظار المراجعة.");
+    }
 
 } elseif ($action === 'set_status') {
     $status = $_POST['status'] ?? '';
@@ -86,6 +104,15 @@ if ($action === 'accept') {
             redirect('/admin/orders.php');
         }
 
+        // Re-submitting the current status is a no-op, not a failure. Treat it
+        // as one explicitly: MySQL reports 0 affected rows when an UPDATE writes
+        // identical values, which the guards below would otherwise read as a
+        // lost race.
+        if ($currentStatus === $status) {
+            flash_set('info', "الطلب #$orderId في هذه الحالة بالفعل.");
+            redirect('/admin/orders.php');
+        }
+
         $wasPending = $currentStatus === 'pending';
 
         // Leaving 'pending' for a status that means the sale is going ahead must
@@ -98,26 +125,48 @@ if ($action === 'accept') {
                 $items->execute([$orderId]);
                 $dec = $pdo->prepare("UPDATE product_variants SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity >= ?");
                 foreach ($items->fetchAll() as $it) {
+                    // Same NULL case as the accept branch: a discontinued variant
+                    // has no stock row, and "WHERE id = NULL" matches nothing —
+                    // which would be misread as out-of-stock and freeze the order.
+                    if ($it['variant_id'] === null) {
+                        continue;
+                    }
                     $dec->execute([$it['quantity'], $it['variant_id'], $it['quantity']]);
                     if ($dec->rowCount() === 0) throw new RuntimeException('OUT_OF_STOCK');
                 }
                 $extra = $status === 'delivered' ? ", delivered_at = NOW()" : "";
-                $pdo->prepare("UPDATE orders SET status=?, handled_by=?$extra WHERE id=?")->execute([$status, $me['id'], $orderId]);
+                $upd = $pdo->prepare("UPDATE orders SET status=?, handled_by=?$extra WHERE id=? AND status='pending'");
+                $upd->execute([$status, $me['id'], $orderId]);
+                if ($upd->rowCount() === 0) throw new RuntimeException('NOT_PENDING');
+
+                // Logged inside the transaction on purpose. order_events is InnoDB,
+                // so a rollback takes the row with it. Logging after the catch —
+                // as this did — wrote an audit entry for a transition that never
+                // happened: order #10271 was recorded as pending -> confirmed
+                // while the row stayed 'pending' because stock ran out.
+                order_log_event($pdo, $orderId, $currentStatus, $status, (int)$me['id'], $me['role']);
                 $pdo->commit();
                 flash_set('success', "تم تحديث حالة الطلب #$orderId.");
             } catch (Throwable $e) {
                 $pdo->rollBack();
-                flash_set('error', "تعذر التحديث — المخزون لم يعد كافيًا لأحد المنتجات في الطلب #$orderId.");
+                $msg = $e->getMessage() === 'NOT_PENDING'
+                    ? "الطلب #$orderId تغيّرت حالته للتو — أعد تحميل الصفحة."
+                    : "تعذر التحديث — المخزون لم يعد كافيًا لأحد المنتجات في الطلب #$orderId.";
+                flash_set('error', $msg);
             }
         } else {
-            if ($status === 'delivered') {
-                $pdo->prepare("UPDATE orders SET status=?, handled_by=?, delivered_at=NOW() WHERE id=?")->execute([$status, $me['id'], $orderId]);
+            $extra = $status === 'delivered' ? ", delivered_at = NOW()" : "";
+            // "AND status = ?" pins the row to the state the transition was
+            // validated against, so two concurrent updates cannot both apply.
+            $upd = $pdo->prepare("UPDATE orders SET status=?, handled_by=?$extra WHERE id=? AND status=?");
+            $upd->execute([$status, $me['id'], $orderId, $currentStatus]);
+            if ($upd->rowCount() > 0) {
+                order_log_event($pdo, $orderId, $currentStatus, $status, (int)$me['id'], $me['role']);
+                flash_set('success', "تم تحديث حالة الطلب #$orderId.");
             } else {
-                $pdo->prepare("UPDATE orders SET status=?, handled_by=? WHERE id=?")->execute([$status, $me['id'], $orderId]);
+                flash_set('error', "الطلب #$orderId تغيّرت حالته للتو — أعد تحميل الصفحة.");
             }
-            flash_set('success', "تم تحديث حالة الطلب #$orderId.");
         }
-        order_log_event($pdo, $orderId, $currentStatus, $status, (int)$me['id'], $me['role']);
     }
 } elseif ($action === 'confirm_payment') {
     // الدفع عند الاستلام يعني نقدًا في اليد. وسم طلب لم يُسلَّم بأنه مدفوع كان
@@ -134,9 +183,14 @@ if ($action === 'accept') {
     } elseif (!order_can_mark_paid($o['status'], $o['payment_method'])) {
         flash_set('error', "لا يمكن تأكيد سداد الطلب #$orderId قبل تسليمه — الدفع عند الاستلام يُحصَّل عند التسليم.");
     } else {
-        $pdo->prepare("UPDATE orders SET payment_status='paid' WHERE id=? AND status='delivered'")->execute([$orderId]);
-        order_log_event($pdo, $orderId, null, 'payment_collected', (int)$me['id'], $me['role'], 'COD collected');
-        flash_set('success', "تم تأكيد السداد للطلب #$orderId.");
+        $pay = $pdo->prepare("UPDATE orders SET payment_status='paid' WHERE id=? AND status='delivered' AND payment_status<>'paid'");
+        $pay->execute([$orderId]);
+        if ($pay->rowCount() > 0) {
+            order_log_event($pdo, $orderId, null, 'payment_collected', (int)$me['id'], $me['role'], 'COD collected');
+            flash_set('success', "تم تأكيد السداد للطلب #$orderId.");
+        } else {
+            flash_set('error', "تعذر تسجيل السداد للطلب #$orderId — تحقق من حالته.");
+        }
     }
 }
 
