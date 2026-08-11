@@ -33,7 +33,7 @@
 | الطبقة | التقنية |
 |---|---|
 | الخادم | PHP 8.2 (بلا أُطر عمل، بلا Composer) |
-| قاعدة البيانات | MySQL / MariaDB 10.4 — 12 جدولًا InnoDB |
+| قاعدة البيانات | MySQL / MariaDB 10.4 — 13 جدولًا InnoDB |
 | الواجهة | HTML + CSS يدوي + JavaScript خام (RTL) |
 | تطبيق الجوال | Flutter (مشروع منفصل) يستهلك `api/` |
 | الوصول لقاعدة البيانات | PDO + prepared statements حقيقية |
@@ -147,7 +147,7 @@ future_store/
 ├── admin/                لوحة المدير (منتجات، طلبات، مستخدمون، تقارير)
 ├── staff/                لوحة الموظف (الطلبات المُسندة إليه)
 ├── account/              صفحات العميل (طلباتي، بياناتي، الصيانة)
-├── includes/             الطبقة المشتركة (auth, db, csrf, functions, order_state)
+├── includes/             الطبقة المشتركة (auth, db, csrf, functions, order_state, audit, throttle)
 ├── assets/               CSS وصور المنتجات
 ├── uploads/              مرفوعات (تنفيذ السكربتات معطّل بـ .htaccess)
 └── schema.sql            بنية قاعدة البيانات (بلا بيانات)
