@@ -31,6 +31,7 @@ TEST_REPORT.md
 BUSINESS_LOGIC_AUDIT.md
 DATABASE_AUDIT.md
 API_SECURITY_AUDIT.md
+ATTACK_SURFACE.md
 
 # ── مرفوعات المستخدمين ─────────────────────────────────────────────────────
 # محتوى المجلد بيانات وقت التشغيل، لا كود. المجلد نفسه يبقى في المستودع عبر
