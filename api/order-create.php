@@ -37,10 +37,21 @@
  */
 
 require_once __DIR__ . '/_bootstrap.php';
+require_once __DIR__ . '/../includes/throttle.php';
 
 only('POST');
 
 $me = require_customer();
+
+// Idempotency (below) collapses a double tap into one order, but it does not
+// stop a loop sending genuinely different baskets. Without a ceiling that
+// fills the orders table and floods the employees' round-robin queues with
+// work nobody placed. Keyed by account and by IP.
+$wait = action_throttle_check('order_create', (string)$me['id']);
+if ($wait > 0) {
+    json_error('طلبات كثيرة في وقت قصير. حاول مرة أخرى بعد ' . throttle_wait_label($wait) . '.', 429);
+}
+action_throttle_hit('order_create', (string)$me['id']);
 
 $address = body_str('address');
 $phone   = body_str('phone');

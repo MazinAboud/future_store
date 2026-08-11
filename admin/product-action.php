@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/audit.php';
 require_role('admin');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') redirect('/admin/products.php');
@@ -11,7 +12,18 @@ $id = (int)($_POST['id'] ?? 0);
 $action = $_POST['action'] ?? '';
 
 if ($action === 'toggle_active') {
+    // The name is read BEFORE the change: after a delete there is no row left
+    // to look it up from, and an audit line that says "product #1028" and
+    // nothing else is not much use to whoever reads it months later.
+    $nameChk = db()->prepare("SELECT name, is_active FROM products WHERE id = ?");
+    $nameChk->execute([$id]);
+    $before = $nameChk->fetch();
+
     db()->prepare("UPDATE products SET is_active = NOT is_active WHERE id = ?")->execute([$id]);
+    if ($before) {
+        admin_log('toggle_product', 'product', $id,
+            ($before['is_active'] ? 'إخفاء' : 'إظهار') . ' المنتج: ' . $before['name']);
+    }
     flash_set('success', 'تم تحديث حالة المنتج.');
 } elseif ($action === 'delete') {
     // The intent here has always been "hide a product that has been sold rather
@@ -25,17 +37,25 @@ if ($action === 'toggle_active') {
                              JOIN product_variants pv ON pv.id = oi.variant_id
                             WHERE pv.product_id = ?");
     $sold->execute([$id]);
+    $soldCount = (int)$sold->fetchColumn();
 
-    if ((int)$sold->fetchColumn() > 0) {
+    $pChk = db()->prepare("SELECT name FROM products WHERE id = ?");
+    $pChk->execute([$id]);
+    $pName = (string)($pChk->fetchColumn() ?: ('#' . $id));
+
+    if ($soldCount > 0) {
         db()->prepare("UPDATE products SET is_active = 0 WHERE id = ?")->execute([$id]);
+        admin_log('hide_product', 'product', $id, "إخفاء \"$pName\" بدل حذفه — له $soldCount سطر مبيعات");
         flash_set('info', 'هذا المنتج له طلبات سابقة فلا يمكن حذفه نهائيًا — تم إخفاؤه من المتجر بدل الحذف حفاظًا على سجل المبيعات.');
     } else {
         try {
             db()->prepare("DELETE FROM products WHERE id = ?")->execute([$id]);
+            admin_log('delete_product', 'product', $id, "حذف المنتج \"$pName\" نهائيًا (بلا مبيعات)");
             flash_set('success', 'تم حذف المنتج.');
         } catch (PDOException $e) {
             // أي ارتباط آخر لم نتوقعه: أخفِ بدل أن تفشل بصمت
             db()->prepare("UPDATE products SET is_active = 0 WHERE id = ?")->execute([$id]);
+            admin_log('hide_product', 'product', $id, "تعذّر حذف \"$pName\" لارتباطه بسجلات أخرى — أُخفي");
             flash_set('info', 'تعذّر حذف المنتج نهائيًا لارتباطه بسجلات أخرى — تم إخفاؤه من المتجر.');
         }
     }
@@ -59,6 +79,7 @@ if ($action === 'toggle_active') {
                 $slug = $base . '-' . $n++;
             }
             db()->prepare("INSERT INTO brands (name, slug) VALUES (?, ?)")->execute([$name, $slug]);
+            admin_log("add_brand", "brand", (int)db()->lastInsertId(), "إضافة ماركة: " . $name);
             flash_set('success', 'تمت إضافة ماركة "' . $name . '" بنجاح.');
         }
     }
@@ -78,6 +99,8 @@ if ($action === 'toggle_active') {
             flash_set('error', 'النسخة المطلوبة غير موجودة.');
         } else {
             db()->prepare("UPDATE product_variants SET stock_quantity = ? WHERE id = ?")->execute([$stock, $variantId]);
+            admin_log("update_stock", "variant", $variantId,
+                $v["name"] . " (" . $v["storage"] . " · " . $v["color"] . "): " . (int)$v["stock_quantity"] . " ← " . $stock);
             $msg = 'تم تحديث مخزون ' . $v['name'] . ' (' . $v['storage'] . ' · ' . $v['color'] . ') إلى ' . $stock . ' قطعة.';
 
             // Restocking from zero is exactly when the "notify me when available"
@@ -99,11 +122,15 @@ if ($action === 'toggle_active') {
     $brandId = (int)($_POST['brand_id'] ?? 0);
     $count = db()->prepare("SELECT COUNT(*) FROM products WHERE brand_id = ?");
     $count->execute([$brandId]);
+    $bChk = db()->prepare("SELECT name FROM brands WHERE id = ?");
+    $bChk->execute([$brandId]);
+    $bName = (string)($bChk->fetchColumn() ?: ('#' . $brandId));
     if ($count->fetchColumn() > 0) {
         flash_set('error', 'لا يمكن حذف هذه الماركة لأنها مرتبطة بمنتجات موجودة. احذف هذه المنتجات أو غيّر ماركتها أولًا.');
     } else {
         try {
             db()->prepare("DELETE FROM brands WHERE id = ?")->execute([$brandId]);
+            admin_log('delete_brand', 'brand', $brandId, 'حذف الماركة: ' . $bName);
             flash_set('success', 'تم حذف الماركة بنجاح.');
         } catch (PDOException $e) {
             flash_set('error', 'تعذر حذف الماركة، حاول مرة أخرى.');

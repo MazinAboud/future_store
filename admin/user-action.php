@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/audit.php';
 require_role('admin');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') redirect('/admin/users.php');
@@ -26,6 +27,7 @@ if ($action === 'create_employee') {
             $hash = password_hash($password, PASSWORD_BCRYPT);
             db()->prepare("INSERT INTO users (role, full_name, email, phone, password_hash) VALUES ('employee',?,?,?,?)")
                 ->execute([$fullName, $email, $phone, $hash]);
+            admin_log('create_employee', 'user', (int)db()->lastInsertId(), "إنشاء موظف: $fullName <$email>");
             flash_set('success', "تم إنشاء حساب الموظف $fullName بنجاح.");
         }
     }
@@ -46,6 +48,8 @@ if ($action === 'toggle_active') {
         flash_set('error', 'لا يمكن تنفيذ هذا الإجراء على هذا الحساب.');
     } else {
         db()->prepare("UPDATE users SET is_active = NOT is_active WHERE id = ?")->execute([$id]);
+        admin_log('toggle_user', 'user', $id,
+            ($targetUser['is_active'] ? 'تعطيل' : 'تفعيل') . " حساب ({$targetUser['role']}) رقم $id");
 
         // an employee going from active -> inactive must hand off every order
         // still open on their queue, so nothing sits stuck behind a stopped account.
@@ -76,6 +80,9 @@ if ($action === 'reset_password') {
     } else {
         db()->prepare("UPDATE users SET password_hash = ? WHERE id = ?")
             ->execute([password_hash($newPassword, PASSWORD_BCRYPT), $id]);
+        // أخطر عملية في اللوحة: تمنح الأدمن سيطرة على حساب شخص آخر، وتُخرجه من
+        // كل أجهزته عبر pwd_fp/pwd_check. لا يجوز أن تمر بلا أثر.
+        admin_log('reset_password', 'user', $id, "إعادة تعيين كلمة سر حساب ($targetRole) رقم $id");
         flash_set('success', 'تم تغيير كلمة السر بنجاح.');
     }
 }
@@ -115,6 +122,7 @@ if ($action === 'edit_user') {
         } else {
             db()->prepare("UPDATE users SET full_name = ?, email = ?, phone = ?, address = ? WHERE id = ?")
                 ->execute([$fullName, $email, $phone !== '' ? $phone : null, $address !== '' ? $address : null, $id]);
+            admin_log('edit_user', 'user', $id, "تعديل بيانات: $fullName <$email>");
             flash_set('success', 'تم تحديث بيانات الحساب بنجاح.');
         }
     }
@@ -171,8 +179,21 @@ if ($action === 'delete_user') {
             $pdo->prepare("DELETE FROM maintenance_requests WHERE user_id = ?")->execute([$id]);
             $pdo->prepare("DELETE FROM stock_notifications WHERE user_id = ?")->execute([$id]);
             $pdo->prepare("DELETE FROM reviews WHERE user_id = ?")->execute([$id]);
+            // Counted before the rows go, so the audit line records what was
+            // actually destroyed. This is the most destructive operation in the
+            // panel — it takes the account's entire order history with it — and
+            // it used to leave no trace at all of who ran it or what it removed.
+            $nOrders  = (int)$pdo->query("SELECT COUNT(*) FROM orders  WHERE user_id = $id")->fetchColumn();
+            $nReviews = (int)$pdo->query("SELECT COUNT(*) FROM reviews WHERE user_id = $id")->fetchColumn();
+
             $pdo->prepare("DELETE FROM orders WHERE user_id = ?")->execute([$id]); // order_items CASCADE
             $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$id]);
+
+            // Logged inside the transaction: if the delete rolls back, the claim
+            // that it happened must roll back with it. actor_id is FK ON DELETE
+            // SET NULL, so the line survives even if that admin is later removed.
+            admin_log('delete_user', 'user', $id,
+                "حذف حساب ({$targetUser['role']}) \"{$targetUser['full_name']}\" ومعه $nOrders طلبًا و$nReviews تقييمًا");
 
             $pdo->commit();
             flash_set('success', 'تم حذف الحساب "' . $targetUser['full_name'] . '" وكل بياناته نهائيًا من قاعدة البيانات.');

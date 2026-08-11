@@ -13,8 +13,18 @@
  */
 
 require_once __DIR__ . '/_bootstrap.php';
+require_once __DIR__ . '/../includes/throttle.php';
 
 only('POST');
+
+// Account creation had no ceiling: one script could fill the users table, and
+// every new row also becomes a valid API token holder. Counted by IP, since
+// there is no account to key on yet.
+$wait = action_throttle_check('register');
+if ($wait > 0) {
+    json_error('محاولات كثيرة لإنشاء حساب. حاول مرة أخرى بعد ' . throttle_wait_label($wait) . '.', 429);
+}
+action_throttle_hit('register');
 
 $fullName = body_str('full_name');
 $email    = body_str('email');

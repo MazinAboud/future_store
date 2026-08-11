@@ -184,6 +184,66 @@ function login_throttle_success(string $email): void
     throttle_clear('acct:' . mb_strtolower($email));
 }
 
+/* --------------------------------------------------------------------------
+ * General action rate limiting.
+ *
+ * The login counters above only fire on a FAILED attempt, which is the right
+ * shape for password guessing and the wrong shape for everything else. Three
+ * endpoints were left with no ceiling at all:
+ *
+ *   api/register.php        — unlimited account creation from one machine.
+ *   api/change-password.php — a stolen token could grind current_password at
+ *                             full speed; the login throttle never sees it
+ *                             because this is not a login.
+ *   api/order-create.php    — idempotency stops an accidental double tap, but
+ *                             nothing stopped a loop from filling the orders
+ *                             table and the employee queues with distinct
+ *                             requests.
+ *
+ * So these count EVERY attempt, successful or not. The counters and the file
+ * storage are the same ones the login throttle uses — one mechanism, not two.
+ * ------------------------------------------------------------------------*/
+
+/** Per-action limits: [max attempts, window seconds, lock seconds]. */
+const ACTION_LIMITS = [
+    // Creating accounts is rare for a real person and cheap for a script.
+    'register'        => [5,  3600, 3600],
+    // Generous for a real user, far below what a password-grinder needs.
+    'change_password' => [10, 900,  900],
+    // A customer placing 20 distinct orders in 15 minutes is already unusual.
+    'order_create'    => [20, 900,  900],
+];
+
+/**
+ * Seconds the caller must wait before this action is allowed, or 0.
+ * Call BEFORE doing the work.
+ *
+ * $subject scopes the counter — an IP for anonymous actions, a user id for
+ * authenticated ones. The IP is always counted as well, so one account cannot
+ * be used as a shield and one machine cannot spread the load across accounts.
+ */
+function action_throttle_check(string $action, string $subject = ''): int
+{
+    [, $window] = ACTION_LIMITS[$action] ?? [0, 0, 0];
+    if ($window === 0) return 0;
+
+    $ipWait = throttle_blocked_for("act:$action:ip:" . throttle_ip(), $window);
+    $subWait = $subject !== '' ? throttle_blocked_for("act:$action:sub:$subject", $window) : 0;
+    return max($ipWait, $subWait);
+}
+
+/** Record one attempt against both counters. Call AFTER the check passes. */
+function action_throttle_hit(string $action, string $subject = ''): void
+{
+    [$max, $window, $lock] = ACTION_LIMITS[$action] ?? [0, 0, 0];
+    if ($window === 0) return;
+
+    throttle_fail("act:$action:ip:" . throttle_ip(), $max, $window, $lock);
+    if ($subject !== '') {
+        throttle_fail("act:$action:sub:$subject", $max, $window, $lock);
+    }
+}
+
 /** Human-readable wait time for an Arabic error message. */
 function throttle_wait_label(int $seconds): string
 {

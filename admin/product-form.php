@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/csrf.php';
+require_once __DIR__ . '/../includes/audit.php';
 require_role('admin');
 
 $id = (int)($_GET['id'] ?? 0);
@@ -134,6 +135,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
+            // Inside the transaction, so a rollback also removes the claim
+            // that the product was saved.
+            admin_log($product ? 'update_product' : 'create_product', 'product', (int)$productId,
+                ($product ? 'تعديل' : 'إضافة') . " المنتج \"$name\" (" . count($validVariants) . " نسخة)"
+                . (!empty($_FILES['image']['name']) ? ' — مع رفع صورة' : ''));
             $pdo->commit();
             flash_set('success', $product ? 'تم تحديث المنتج بنجاح.' : 'تم إضافة المنتج بنجاح.');
             redirect('/admin/products.php');

@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/csrf.php'; // the inline stock-edit forms below call csrf_field()
+require_once __DIR__ . '/../includes/audit.php';
 require_role('admin');
 
 $pdo = db();
@@ -327,6 +328,32 @@ require __DIR__ . '/../includes/admin-header.php';
         </li>
       <?php endforeach; ?>
     </ul>
+  <?php endif; ?>
+</div>
+
+<div class="admin-card">
+  <div class="admin-card-head"><h3>سجل العمليات الإدارية</h3></div>
+  <div class="hint">كل عملية تغيّر المنتجات أو المخزون أو الحسابات تُسجَّل هنا. السجل <b>إضافة فقط</b> — لا يُعدَّل ولا يُحذف من أي مكان في التطبيق، لأنه الدليل الوحيد عند أي خلاف. حذف حساب يمحو طلباته وتقييماته، وهذا السطر هو ما يبقى منه.</div>
+  <?php $auditRows = admin_events_recent(50); ?>
+  <?php if (empty($auditRows)): ?>
+    <p class="text-muted">لا توجد عمليات مسجّلة بعد.</p>
+  <?php else: ?>
+    <div class="table-wrap">
+      <table class="simple-table">
+        <tr><th>الوقت</th><th>المنفِّذ</th><th>العملية</th><th>التفاصيل</th><th>IP</th></tr>
+        <?php foreach ($auditRows as $ev): ?>
+          <tr>
+            <td style="white-space:nowrap"><?= e($ev['created_at']) ?></td>
+            <td><?= e($ev['actor_name'] ?? '—') ?><?php if ($ev['actor_role']): ?>
+              <span class="text-muted" style="font-size:12px"><?= $ev['actor_role'] === 'admin' ? 'أدمن' : 'موظف' ?></span>
+            <?php endif; ?></td>
+            <td><?= e(admin_action_label($ev['action'])) ?></td>
+            <td><?= e($ev['summary'] ?? '') ?></td>
+            <td class="text-muted" style="font-size:12px"><?= e($ev['ip'] ?? '') ?></td>
+          </tr>
+        <?php endforeach; ?>
+      </table>
+    </div>
   <?php endif; ?>
 </div>
 

@@ -18,10 +18,21 @@
  */
 
 require_once __DIR__ . '/_bootstrap.php';
+require_once __DIR__ . '/../includes/throttle.php';
 
 only('POST');
 
 $me = require_customer();
+
+// current_password is verified below, which makes this a password-guessing
+// surface that the login throttle never sees — it only counts failed logins.
+// Someone holding a stolen token could otherwise grind the old password at
+// full speed and, on success, lock the real owner out of every device.
+$wait = action_throttle_check('change_password', (string)$me['id']);
+if ($wait > 0) {
+    json_error('محاولات كثيرة. حاول مرة أخرى بعد ' . throttle_wait_label($wait) . '.', 429);
+}
+action_throttle_hit('change_password', (string)$me['id']);
 
 $current = (string)(body()['current_password'] ?? '');
 $new1    = (string)(body()['new_password'] ?? '');
