@@ -14,13 +14,30 @@ if ($action === 'toggle_active') {
     db()->prepare("UPDATE products SET is_active = NOT is_active WHERE id = ?")->execute([$id]);
     flash_set('success', 'تم تحديث حالة المنتج.');
 } elseif ($action === 'delete') {
-    try {
-        db()->prepare("DELETE FROM products WHERE id = ?")->execute([$id]);
-        flash_set('success', 'تم حذف المنتج.');
-    } catch (PDOException $e) {
-        // product has order history referencing its variants — hide instead of hard delete
+    // The intent here has always been "hide a product that has been sold rather
+    // than destroy it" — but waiting for a foreign-key exception never triggered
+    // it. order_items.variant_id is ON DELETE SET NULL, so the DELETE succeeds,
+    // takes the variants with it, and leaves past order lines pointing at
+    // nothing. The catch block was unreachable. Proven by deleting a product
+    // with three sales: it vanished and the flash said "تم حذف المنتج".
+    // The rule has to be checked before the delete, not inferred from its failure.
+    $sold = db()->prepare("SELECT COUNT(*) FROM order_items oi
+                             JOIN product_variants pv ON pv.id = oi.variant_id
+                            WHERE pv.product_id = ?");
+    $sold->execute([$id]);
+
+    if ((int)$sold->fetchColumn() > 0) {
         db()->prepare("UPDATE products SET is_active = 0 WHERE id = ?")->execute([$id]);
-        flash_set('info', 'هذا المنتج له طلبات سابقة فما يقدرش يتحذف نهائيًا، فتم إخفاؤه من المتجر بدل الحذف.');
+        flash_set('info', 'هذا المنتج له طلبات سابقة فلا يمكن حذفه نهائيًا — تم إخفاؤه من المتجر بدل الحذف حفاظًا على سجل المبيعات.');
+    } else {
+        try {
+            db()->prepare("DELETE FROM products WHERE id = ?")->execute([$id]);
+            flash_set('success', 'تم حذف المنتج.');
+        } catch (PDOException $e) {
+            // أي ارتباط آخر لم نتوقعه: أخفِ بدل أن تفشل بصمت
+            db()->prepare("UPDATE products SET is_active = 0 WHERE id = ?")->execute([$id]);
+            flash_set('info', 'تعذّر حذف المنتج نهائيًا لارتباطه بسجلات أخرى — تم إخفاؤه من المتجر.');
+        }
     }
 } elseif ($action === 'add_brand') {
     $name = trim($_POST['brand_name'] ?? '');

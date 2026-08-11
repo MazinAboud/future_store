@@ -9,6 +9,13 @@ function money(float $n): string {
     return CURRENCY . number_format($n, 2);
 }
 
+/**
+ * عتبة "المخزون المنخفض" — رقم واحد لكل الشاشات.
+ * كانت لوحة المدير تَعُدّ بـ 3 بينما التقارير تسرد بـ 5، فيقول المؤشر "39 منتجًا"
+ * ثم تعرض القائمة عددًا آخر، والمدير لا يعرف أي الرقمين يصدّق.
+ */
+const LOW_STOCK_THRESHOLD = 5;
+
 function redirect(string $path): void {
     // Only ever redirect to a path inside this site. Some callers pass a value
     // that came from the request (compare-toggle.php's "back" field), and a

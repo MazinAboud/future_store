@@ -95,7 +95,7 @@ $maxCust = $custGrowth ? max(array_column($custGrowth, 'c')) : 1;
 $lowStock = $pdo->query("
     SELECT pv.id, p.name, pv.storage, pv.color, pv.stock_quantity, pv.sku
     FROM product_variants pv JOIN products p ON p.id = pv.product_id
-    WHERE pv.stock_quantity <= 5
+    WHERE pv.stock_quantity <= " . LOW_STOCK_THRESHOLD . "
     ORDER BY pv.stock_quantity ASC
 ")->fetchAll();
 
