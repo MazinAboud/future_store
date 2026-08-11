@@ -3,6 +3,7 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/audit.php';
+require_once __DIR__ . '/../includes/cache.php';
 require_role('admin');
 
 $id = (int)($_GET['id'] ?? 0);
@@ -141,6 +142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ($product ? 'تعديل' : 'إضافة') . " المنتج \"$name\" (" . count($validVariants) . " نسخة)"
                 . (!empty($_FILES['image']['name']) ? ' — مع رفع صورة' : ''));
             $pdo->commit();
+            cache_forget(CACHE_KEY_API_BEST_SELLERS);
             flash_set('success', $product ? 'تم تحديث المنتج بنجاح.' : 'تم إضافة المنتج بنجاح.');
             redirect('/admin/products.php');
         } catch (Throwable $e) {

@@ -3,6 +3,7 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/order_state.php';
+require_once __DIR__ . '/../includes/cache.php';
 require_any_role(['admin', 'employee']);
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') redirect('/admin/orders.php');
@@ -194,4 +195,8 @@ if ($action === 'accept') {
     }
 }
 
+// Best sellers now count delivered orders only, so a delivery changes the
+// answer. Dropping the entry here is what keeps the app and the site telling
+// the customer the same thing.
+cache_forget(CACHE_KEY_API_BEST_SELLERS);
 redirect('/admin/orders.php');

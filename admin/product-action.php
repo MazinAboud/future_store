@@ -3,6 +3,7 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/csrf.php';
 require_once __DIR__ . '/../includes/audit.php';
+require_once __DIR__ . '/../includes/cache.php';
 require_role('admin');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') redirect('/admin/products.php');
@@ -117,6 +118,10 @@ if ($action === 'toggle_active') {
             flash_set('success', $msg);
         }
     }
+    // This branch returns to a different page, so it exits before the shared
+    // invalidation at the bottom of the file. Stock feeds the API's total_stock,
+    // so it has to drop the entry on its own way out.
+    cache_forget(CACHE_KEY_API_BEST_SELLERS);
     redirect('/admin/reports.php');
 } elseif ($action === 'delete_brand') {
     $brandId = (int)($_POST['brand_id'] ?? 0);
@@ -137,4 +142,8 @@ if ($action === 'toggle_active') {
         }
     }
 }
+// Any of the branches above can change what the API homepage reports:
+// a product hidden, deleted, restocked or renamed. Without this the app
+// keeps showing the old list for up to ten minutes and looks broken.
+cache_forget(CACHE_KEY_API_BEST_SELLERS);
 redirect('/admin/products.php');

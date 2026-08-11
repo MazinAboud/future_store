@@ -37,6 +37,13 @@
  * order status, stock levels at checkout. Those stay uncached, deliberately.
  */
 
+/**
+ * The one cache key the project uses. Named here rather than repeated as a
+ * string literal at the write site and again at every invalidation site — that
+ * is how an invalidation quietly stops matching the thing it was meant to drop.
+ */
+const CACHE_KEY_API_BEST_SELLERS = 'api:home:best_sellers:v1';
+
 /** Cache directory, outside the document root so nothing can be fetched directly. */
 function cache_dir(): string
 {
@@ -117,6 +124,15 @@ function cache_remember(string $key, int $ttlSeconds, callable $producer)
  */
 function cache_forget(string $prefix = ''): void
 {
+    // $prefix used to be accepted and then ignored — every call flushed
+    // everything. Nothing passed a prefix yet, so it never misbehaved, but a
+    // parameter that silently does nothing is a trap for whoever trusts the
+    // signature next. Keys are hashed into the filename, so a prefix cannot be
+    // matched by globbing; the key list has to be given explicitly.
+    if ($prefix !== '') {
+        @unlink(cache_path($prefix));
+        return;
+    }
     foreach (glob(cache_dir() . DIRECTORY_SEPARATOR . '*.cache') ?: [] as $f) {
         @unlink($f);
     }

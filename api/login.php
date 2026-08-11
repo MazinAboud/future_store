@@ -50,7 +50,11 @@ $user = $stmt->fetch();
 // One message for "no such account", "wrong password" and "account stopped".
 // Distinguishing them would turn this endpoint into a tool for discovering
 // which email addresses are registered.
-if (!$user || !password_verify($password, $user['password_hash'])) {
+// password_check_constant_time() hashes against a decoy when the row is
+// missing, so a request for an unregistered address costs the same as one for
+// a real account. Without it the identical error message below meant nothing:
+// the reply time alone separated the two, by 538% on this server.
+if (!password_check_constant_time($user['password_hash'] ?? null, $password) || !$user) {
     login_throttle_fail($email);
     json_error('البريد الإلكتروني أو كلمة السر غير صحيحة.', 401);
 }

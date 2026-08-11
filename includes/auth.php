@@ -31,6 +31,39 @@ if (session_status() === PHP_SESSION_NONE) {
     // stack, and costs nothing.
     session_name('FSSESSID');
     session_start();
+
+    /*
+     * Session lifetime.
+     *
+     * The cookie has lifetime 0, so it dies when the browser closes — and
+     * nothing else ever ended it. A browser left open on a shared machine, or
+     * a session cookie captured once, stayed valid indefinitely. Every other
+     * control in this file assumes the session still belongs to whoever
+     * authenticated; time is what makes that assumption decay.
+     *
+     * Two independent limits, both enforced:
+     *   idle     — 2 hours since the last request. Covers the walked-away case.
+     *   absolute — 12 hours since login however active the session has been.
+     *              An idle timer alone never bounds a stolen cookie, because an
+     *              attacker using it keeps resetting the idle clock.
+     *
+     * Deliberately generous: an admin working through a day of orders must not
+     * be dropped mid-task. The goal is to bound the window, not to nag.
+     */
+    if (!empty($_SESSION['user_id'])) {
+        $now      = time();
+        $lastSeen = (int)($_SESSION['last_seen'] ?? $now);
+        $started  = (int)($_SESSION['login_at']  ?? $now);
+
+        if (($now - $lastSeen) > 7200 || ($now - $started) > 43200) {
+            $_SESSION = [];
+            session_destroy();
+            session_start();   // fresh empty session so the notice below survives
+            $_SESSION['flash'] = ['type' => 'info', 'message' => 'انتهت الجلسة. سجّل الدخول من جديد.'];
+        } else {
+            $_SESSION['last_seen'] = $now;
+        }
+    }
 }
 
 /**
@@ -52,7 +85,11 @@ function attempt_login(string $email, string $password, string $requiredRole): b
     $stmt->execute([$email, $requiredRole]);
     $user = $stmt->fetch();
 
-    if (!$user || !password_verify($password, $user['password_hash'])) {
+    // password_check_constant_time() lives in functions.php so the API's login
+    // endpoint can use it too — api/_bootstrap.php deliberately never includes
+    // this file. It hashes against a decoy when no row came back, so a login
+    // attempt for an unregistered address costs what a real one costs.
+    if (!password_check_constant_time($user['password_hash'] ?? null, $password) || !$user) {
         return false;
     }
 
@@ -62,6 +99,8 @@ function attempt_login(string $email, string $password, string $requiredRole): b
     $_SESSION['role']    = $user['role'];
     $_SESSION['name']    = $user['full_name'];
     $_SESSION['pwd_fp']  = pwd_fingerprint($user['password_hash']);
+    $_SESSION['login_at']  = time();   // anchors the absolute session limit
+    $_SESSION['last_seen'] = time();   // anchors the idle limit
     return true;
 }
 
@@ -77,7 +116,7 @@ function attempt_team_login(string $email, string $password): ?string {
     $stmt->execute([$email]);
     $user = $stmt->fetch();
 
-    if (!$user || !password_verify($password, $user['password_hash'])) {
+    if (!password_check_constant_time($user['password_hash'] ?? null, $password) || !$user) {
         return null;
     }
 
@@ -86,6 +125,8 @@ function attempt_team_login(string $email, string $password): ?string {
     $_SESSION['role']    = $user['role'];
     $_SESSION['name']    = $user['full_name'];
     $_SESSION['pwd_fp']  = pwd_fingerprint($user['password_hash']);
+    $_SESSION['login_at']  = time();
+    $_SESSION['last_seen'] = time();
     return $user['role'];
 }
 

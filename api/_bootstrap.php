@@ -26,6 +26,16 @@ require_once __DIR__ . '/../includes/functions.php'; // -> assign_next_employee(
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
 
+// Nothing here is safe for a shared cache to keep. Most endpoints answer for
+// one Bearer token — orders, addresses, the account itself — and a proxy that
+// stored one of those would serve one customer's data to the next caller. The
+// public catalogue endpoints are not sensitive, but they embed absolute image
+// URLs built per request, which is exactly what makes an unkeyed cache entry
+// dangerous (see api_origin). The app does its own image caching, so there is
+// nothing to gain here and a cross-customer leak to lose.
+header('Cache-Control: no-store, private');
+header('Vary: Authorization');
+
 /** Emit a JSON response and stop. */
 function json_out(array $data, int $status = 200): never
 {
@@ -162,8 +172,55 @@ function api_origin(): string
     $https  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
            || (($_SERVER['SERVER_PORT'] ?? '') === '443');
     $scheme = $https ? 'https' : 'http';
-    $host   = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
-    return $scheme . '://' . $host . BASE_URL;
+
+    // HTTP_HOST is whatever the client typed into the request line. Taking it
+    // unchecked meant "Host: evil.example.com" came back as
+    // http://evil.example.com/.../iphone-15.jpg in every image URL of the
+    // response — proven against api/home.php and api/products.php. On its own
+    // that only poisons the attacker's own reply, but these responses carry no
+    // Cache-Control and no Vary, so any proxy or CDN in front of the site can
+    // store one and hand it to everyone else. The app would then fetch product
+    // images from a host the attacker controls: it learns what each customer
+    // browses and decides what they see.
+    //
+    // APP_HOST, when configured, ends the question entirely — the origin stops
+    // depending on the request at all. Without it the header is accepted only
+    // for loopback and private-range addresses, which is what development,
+    // the Android emulator (10.0.2.2) and a phone on the LAN actually use.
+    if (defined('APP_HOST') && APP_HOST !== '') {
+        return $scheme . '://' . APP_HOST . BASE_URL;
+    }
+
+    $host = (string)($_SERVER['HTTP_HOST'] ?? '');
+
+    // Shape first: a host is letters, digits, dots, hyphens, optional :port.
+    // Anything else (spaces, slashes, @, CR/LF) is not a host name.
+    if ($host !== '' && preg_match('/^[A-Za-z0-9.\-]+(:\d{1,5})?$/', $host)) {
+        $bare = strtolower(explode(':', $host, 2)[0]);
+        $isLoopback = in_array($bare, ['localhost', '127.0.0.1', '::1'], true);
+        $isPrivate  = filter_var($bare, FILTER_VALIDATE_IP) !== false
+            && filter_var($bare, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
+
+        if ($isLoopback || $isPrivate) {
+            return $scheme . '://' . $host . BASE_URL;
+        }
+    }
+
+    // Untrusted or absent. The fallback must not be SERVER_NAME: Apache runs
+    // with UseCanonicalName Off by default, which fills SERVER_NAME from the
+    // Host header, so falling back to it hands the attacker exactly what the
+    // check above refused. Confirmed on this server — "Host: evil.example.com"
+    // produced SERVER_NAME = evil.example.com.
+    //
+    // SERVER_ADDR is the address the connection actually landed on. It comes
+    // from the socket, not from anything the client can write.
+    $addr = (string)($_SERVER['SERVER_ADDR'] ?? '');
+    if ($addr !== '' && filter_var($addr, FILTER_VALIDATE_IP)) {
+        // IPv6 literals need brackets to be a valid authority in a URL.
+        $literal = str_contains($addr, ':') ? '[' . $addr . ']' : $addr;
+        return $scheme . '://' . $literal . BASE_URL;
+    }
+    return $scheme . '://localhost' . BASE_URL;
 }
 
 /**

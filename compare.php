@@ -42,7 +42,8 @@ if (empty($products)) {
         JOIN brands b ON b.id = p.brand_id
         JOIN product_variants pv ON pv.product_id = p.id
         LEFT JOIN order_items oi ON oi.variant_id = pv.id
-        LEFT JOIN orders o ON o.id = oi.order_id AND o.status NOT IN ('rejected','cancelled')
+        -- same 'delivered only' rule the rest of the project uses; see api/home.php
+        LEFT JOIN orders o ON o.id = oi.order_id AND o.status = 'delivered'
         WHERE p.is_active = 1
         GROUP BY p.id
         ORDER BY sold DESC, p.created_at DESC

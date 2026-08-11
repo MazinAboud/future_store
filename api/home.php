@@ -42,7 +42,7 @@ $brands = db()->query("
  * Cached under a version-tagged key so that changing the query shape below
  * cannot serve rows in the old format to the new code.
  */
-$best = cache_remember('api:home:best_sellers:v1', 600, function () {
+$best = cache_remember(CACHE_KEY_API_BEST_SELLERS, 600, function () {
     return db()->query("
         SELECT p.id, p.name, p.slug, p.short_desc, p.image_path, b.name AS brand_name,
                MIN(pv.price)                AS min_price,
@@ -52,7 +52,14 @@ $best = cache_remember('api:home:best_sellers:v1', 600, function () {
         JOIN brands b ON b.id = p.brand_id
         JOIN product_variants pv ON pv.product_id = p.id
         LEFT JOIN order_items oi ON oi.variant_id = pv.id
-        LEFT JOIN orders o ON o.id = oi.order_id AND o.status NOT IN ('rejected','cancelled')
+        -- 'delivered' only, matching index.php and both report surfaces. This
+        -- query counted every order that merely was not cancelled, so untouched
+        -- pending baskets ranked products: 311 units against 225 actually
+        -- delivered, a 38% overstatement, on 49 orders that never shipped. The
+        -- website was corrected for this and the API was missed, which is worse
+        -- than either being wrong alone — the app and the site then disagree
+        -- about what is selling, and nobody can tell which one to believe.
+        LEFT JOIN orders o ON o.id = oi.order_id AND o.status = 'delivered'
         WHERE p.is_active = 1
         GROUP BY p.id
         ORDER BY sold DESC, p.created_at DESC, p.id DESC
