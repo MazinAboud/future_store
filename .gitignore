@@ -17,8 +17,10 @@ includes/config.php
 CREDENTIALS.local.md
 *credentials*
 *CREDENTIALS*
-FutureStore_Accounts.docx
 *_Accounts.docx
+*.docx
+*.xlsx
+*.pdf
 
 # ── تقارير التدقيق والذاكرة الداخلية ───────────────────────────────────────
 # تصف بنية الحماية ونقاط الضعف المعروفة وتفاصيل البيئة. مفيدة لك محليًا،

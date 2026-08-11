@@ -54,13 +54,12 @@ Options -Indexes
 # executes rather than reveals it today, but a future server misconfiguration
 # (php engine off, a rename to .php.bak) would otherwise hand the file over as
 # text. These rules refuse the whole class outright.
-# docx/xlsx/pdf/zip are on this list because of a real miss, not caution:
-# FutureStore_Accounts.docx — every account in the system with its password in
-# clear text — sat in the project root and returned HTTP 200 to anyone who
-# guessed the name. It was excluded from Git and from the credentials page, so
-# every check that had been run on it passed, and the one path that mattered
-# was never tested. A document dropped in the web root is published by default;
-# the extension list has to say otherwise.
+# Documents and archives are on this list because of a real miss, not caution.
+# A working file holding sensitive material was left in the project root during
+# development and was served at HTTP 200. It was excluded from Git and linked
+# from nowhere, so every check applied to it passed — and the one path that
+# mattered, fetching it over HTTP, was never tested. A document dropped in the
+# web root is published by default; the extension list has to say otherwise.
 <FilesMatch "\.(sql|bak|save|old|swp|swo|log|env|ini|yml|yaml|md|dist|sh|inc|phps|tpl|docx|doc|xlsx|xls|pptx|csv|pdf|zip|rar|7z|tar|gz)$">
     <IfModule mod_authz_core.c>
         Require all denied
